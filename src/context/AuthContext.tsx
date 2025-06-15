@@ -1,17 +1,16 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User as FirebaseUser, onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../config/firebase';
-import { 
-  signInWithEmail, 
-  signUpWithEmail, 
-  signInWithGoogle, 
+import {
+  signInWithEmail,
+  signUpWithEmail,
+  signInWithGoogle,
   signOutUser,
   getUserDocument,
   updateUserDocument,
   incrementUserUsage,
   resetUserDailyUsage,
-  handleRedirectResult,
-  createUserDocument
+  createUserDocument // Belge oluşturma fonksiyonunu import ediyoruz
 } from '../services/firebase';
 import { User, AuthContextType } from '../types';
 
@@ -34,56 +33,42 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const checkRedirect = async () => {
-      try {
-        console.log('🔄 Uygulama yüklenirken yönlendirme sonucu kontrol ediliyor...');
-        const firebaseUser = await handleRedirectResult();
-        if (firebaseUser) {
-
-          console.log('✅ Yönlendirme sonucu işlendi, kullanıcı:', firebaseUser.uid);
-        }
-      } catch (error) {
-        console.error('❌ Yönlendirme sonucu işlenirken hata:', error);
-      }
-    };
-
-    checkRedirect();
-  }, []);
-
-  useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      console.log('🔥 Auth state changed:', firebaseUser?.uid);
-      
+      console.log('🔥 Auth state changed. User UID:', firebaseUser?.uid);
+
       try {
         if (firebaseUser) {
-          console.log('✅ User is signed in, checking user document...');
+          console.log('✅ User is signed in. Checking for user document...');
           let userData = await getUserDocument(firebaseUser.uid);
 
-          // EĞER KULLANICI BELGESİ YOKSA OLUŞTUR
+          // EĞER KULLANICI BELGESİ VERİTABANINDA YOKSA, HEMEN OLUŞTUR.
+          // Bu, hem eski kullanıcıları hem de herhangi bir nedenle belgesi olmayanları kurtarır.
           if (!userData) {
             console.log('📄 User document not found, creating one...');
+            // Not: Google ile giriş yapanların displayName'i burada hazır gelir.
+            // E-posta ile kaydolanlar için ise signUpWithEmail içinde displayName zaten atanmıştı.
             await createUserDocument(firebaseUser, {
               name: firebaseUser.displayName || 'Yeni Kullanıcı',
               email: firebaseUser.email
             });
-            // Belgeyi oluşturduktan sonra tekrar çekiyoruz.
+            // Belgeyi oluşturduktan sonra en güncel halini tekrar çekiyoruz.
             userData = await getUserDocument(firebaseUser.uid);
           }
 
           if (userData) {
             console.log('📄 User document found:', userData);
 
-            // Check if daily usage needs reset
+            // Gerekli günlük kontrolleri yap (kullanım sıfırlama, abonelik durumu vs.)
             const today = new Date().toDateString();
             if (userData.lastUsageReset !== today) {
+              console.log('🔄 Resetting daily usage for new day.');
               await resetUserDailyUsage(firebaseUser.uid);
               userData.dailyUsage = 0;
               userData.lastUsageReset = today;
             }
 
-            // Check subscription status
             if (userData.subscriptionEndDate && new Date() > userData.subscriptionEndDate) {
-              // Subscription expired, downgrade to free
+              console.log('🚫 Subscription expired. Downgrading to free plan.');
               await updateUserDocument(firebaseUser.uid, {
                 plan: 'free',
                 subscriptionStatus: 'inactive'
@@ -92,122 +77,87 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               userData.subscriptionStatus = 'inactive';
             }
 
-            console.log('🎯 Setting user data and marking as authenticated');
+            console.log('🎯 Setting final user data and marking as authenticated.');
             setUser(userData);
           } else {
-            // Bu blok artık teorik olarak çalışmamalı, ama bir güvenlik önlemi olarak kalabilir.
-            console.log('❌ Critical error: Could not find or create user document.');
+            // Bu blok, belge oluşturma ve çekme işlemi de başarısız olursa çalışır.
+            console.error('❌ CRITICAL: Could not find or create user document. Signing out for safety.');
+            await signOutUser();
             setUser(null);
           }
         } else {
-          // User is signed out
-          console.log('🚪 User signed out');
+          // Kullanıcı çıkış yaptı veya hiç giriş yapmamış.
+          console.log('🚪 User signed out or not authenticated.');
           setUser(null);
         }
       } catch (error) {
-        console.error('❌ Auth state change error:', error);
+        console.error('❌ An error occurred in onAuthStateChanged:', error);
         setUser(null);
       } finally {
-        console.log('⏰ Setting loading to false');
+        // Tüm işlemler bittikten sonra yükleme ekranını kapat.
+        console.log('⏰ Auth check finished. Setting loading to false.');
         setLoading(false);
       }
     });
 
-    return unsubscribe;
+    // Component kaldırıldığında listener'ı temizle.
+    return () => unsubscribe();
   }, []);
 
   const login = async (email: string, password: string) => {
-    try {
-      console.log('🔐 Attempting login for:', email);
-      
-      const firebaseUser = await signInWithEmail(email, password);
-      console.log('✅ Login successful for:', firebaseUser.uid);
-      
-      // Don't set loading to false here - let onAuthStateChanged handle it
-      
-    } catch (error) {
-      console.error('❌ Login error:', error);
-      setLoading(false);
-      throw error;
-    }
+    // onAuthStateChanged durumu yöneteceğinden burada sadece giriş yapılır.
+    await signInWithEmail(email, password);
   };
 
   const register = async (email: string, password: string, name: string) => {
-    try {
-      console.log('📝 Attempting registration for:', email);
-      
-      const firebaseUser = await signUpWithEmail(email, password, name);
-      console.log('✅ Registration successful for:', firebaseUser.uid);
-      
-      // Don't set loading to false here - let onAuthStateChanged handle it
-      
-    } catch (error) {
-      console.error('❌ Registration error:', error);
-      setLoading(false);
-      throw error;
-    }
+    // onAuthStateChanged durumu yöneteceğinden burada sadece kayıt yapılır.
+    await signUpWithEmail(email, password, name);
   };
 
   const loginWithGoogle = async () => {
     try {
-      console.log('🔍 Google ile giriş deneniyor, yönlendiriliyor...');
-      // Bu fonksiyon sadece yönlendirmeyi başlatır. await'e gerek yok
-      // ama hata yakalamak için yine de async/await yapısında tutabiliriz.
+      console.log('🔍 Attempting Google login with popup...');
+      // Bu fonksiyon artık doğrudan firebaseUser nesnesini döndürecek.
+      // onAuthStateChanged'in tetiklenmesini beklememize gerek kalmayacak,
+      // çünkü belge oluşturma işlemini de içinde hallediyor.
       await signInWithGoogle();
-      // Yönlendirme başladığı için bu satırdan sonrası çalışmayacaktır.
+      // Başarılı girişten sonra onAuthStateChanged zaten en güncel veriyi alıp state'i ayarlayacak.
     } catch (error) {
-      console.error('❌ Google ile giriş başlatılırken hata:', error);
+      console.error('❌ Google login error:', error);
       setLoading(false);
       throw error;
     }
   };
 
   const logout = async () => {
-    try {
-      console.log('🚪 Logging out user');
-      await signOutUser();
-      setUser(null);
-    } catch (error) {
-      console.error('❌ Logout error:', error);
-    }
+    await signOutUser();
+    setUser(null); // State'i anında temizle
   };
 
   const updateUserPlan = async (plan: 'free' | 'pro') => {
     if (user) {
-      try {
-        console.log('💎 Updating user plan to:', plan);
-        await updateUserDocument(user.id, { plan });
-        setUser({ ...user, plan });
-      } catch (error) {
-        console.error('❌ Update user plan error:', error);
-        throw error;
-      }
+      await updateUserDocument(user.id, { plan });
+      setUser({ ...user, plan });
     }
   };
 
   const incrementUsage = async () => {
     if (user && user.plan === 'free') {
-      try {
-        await incrementUserUsage(user.id);
-        setUser({ ...user, dailyUsage: user.dailyUsage + 1 });
-      } catch (error) {
-        console.error('❌ Increment usage error:', error);
-      }
+      await incrementUserUsage(user.id);
+      setUser({ ...user, dailyUsage: user.dailyUsage + 1 });
     }
   };
 
   const resetDailyUsage = async () => {
     if (user) {
-      try {
-        await resetUserDailyUsage(user.id);
-        setUser({ ...user, dailyUsage: 0 });
-      } catch (error) {
-        console.error('❌ Reset daily usage error:', error);
-      }
+      await resetUserDailyUsage(user.id);
+      setUser({ ...user, dailyUsage: 0 });
     }
   };
 
-  const isAuthenticated = !!user && !loading;
+  // isAuthenticated'i hesaplarken artık sadece user'ın varlığına bakmak yeterli.
+  // loading state'i, App.tsx'te genel bir yükleme ekranı göstermek için kullanılacak.
+  const isAuthenticated = !!user;
 
   const value: AuthContextType = {
     user,
@@ -221,13 +171,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     incrementUsage,
     resetDailyUsage,
   };
-
-  console.log('🎯 Auth context state:', { 
-    hasUser: !!user, 
-    isAuthenticated, 
-    loading,
-    userId: user?.id 
-  });
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

@@ -1,8 +1,7 @@
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
-  signInWithRedirect,
-  getRedirectResult,
+  signInWithPopup,
   signOut,
   updateProfile,
   User as FirebaseUser
@@ -59,41 +58,28 @@ export const signUpWithEmail = async (email: string, password: string, name: str
 
 export const signInWithGoogle = async () => {
   try {
-    console.log('Firebase: Signing in with Google using redirect');
-    await signInWithRedirect(auth, googleProvider);
-    // Note: The actual sign-in result will be handled by getRedirectResult
+    console.log('Firebase: Signing in with Google using POPUP');
+    const result = await signInWithPopup(auth, googleProvider);
+
+    if (result.user) {
+      console.log('Firebase: Google sign in successful via popup:', result.user.uid);
+      // Kullanıcı belgesinin olup olmadığını kontrol et ve yoksa oluştur.
+      await createUserDocument(result.user, {
+        name: result.user.displayName || 'Google User',
+        plan: 'free',
+        googleId: result.user.uid
+      });
+      console.log('Firebase: Google user document created/updated');
+      return result.user;
+    }
+    return null;
+
   } catch (error) {
     console.error('Firebase: Google sign in error:', error);
     throw error;
   }
 };
 
-export const handleRedirectResult = async () => {
-  try {
-    console.log('Firebase: Checking for redirect result');
-    const result = await getRedirectResult(auth);
-    
-    if (result && result.user) {
-      const user = result.user;
-      console.log('Firebase: Google sign in successful via redirect:', user.uid);
-      
-      // Create or update user document
-      await createUserDocument(user, { 
-        name: user.displayName || 'Google User',
-        plan: 'free',
-        googleId: user.uid
-      });
-      
-      console.log('Firebase: Google user document created/updated');
-      return user;
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('Firebase: Redirect result error:', error);
-    throw error;
-  }
-};
 
 export const signOutUser = async () => {
   try {
@@ -106,21 +92,26 @@ export const signOutUser = async () => {
   }
 };
 
+// src/services/firebase.ts
+
+// src/services/firebase.ts
+
 export const createUserDocument = async (firebaseUser: FirebaseUser, additionalData?: any) => {
   if (!firebaseUser) return;
-  
+
   console.log('Firebase: Creating/updating user document for:', firebaseUser.uid);
-  
+
   const userRef = doc(db, 'users', firebaseUser.uid);
   const userSnap = await getDoc(userRef);
-  
+
   if (!userSnap.exists()) {
     const { displayName, email } = firebaseUser;
     const createdAt = new Date();
     const today = new Date().toDateString();
-    
+
     try {
-      const userData = {
+      // Temel kullanıcı verilerini oluştur
+      const userData: any = {
         name: additionalData?.name || displayName || 'Kullanıcı',
         email: email || undefined,
         plan: additionalData?.plan || 'free',
@@ -129,10 +120,14 @@ export const createUserDocument = async (firebaseUser: FirebaseUser, additionalD
         lastUsageReset: today,
         isAdmin: false,
         subscriptionStatus: 'inactive',
-        googleId: additionalData?.googleId,
         ...additionalData
       };
-      
+
+      // Sadece varsa `googleId` alanını ekle.
+      if (additionalData?.googleId) {
+        userData.googleId = additionalData.googleId;
+      }
+
       await setDoc(userRef, userData);
       console.log('Firebase: User document created successfully');
     } catch (error) {
@@ -141,11 +136,11 @@ export const createUserDocument = async (firebaseUser: FirebaseUser, additionalD
     }
   } else {
     console.log('Firebase: User document already exists');
-    
+
     // Check if daily usage needs reset
     const userData = userSnap.data();
     const today = new Date().toDateString();
-    
+
     if (userData.lastUsageReset !== today) {
       console.log('Firebase: Resetting daily usage for new day');
       await updateDoc(userRef, {
@@ -154,7 +149,7 @@ export const createUserDocument = async (firebaseUser: FirebaseUser, additionalD
       });
     }
   }
-  
+
   return userRef;
 };
 
