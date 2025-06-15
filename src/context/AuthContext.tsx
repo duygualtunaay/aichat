@@ -9,7 +9,9 @@ import {
   getUserDocument,
   updateUserDocument,
   incrementUserUsage,
-  resetUserDailyUsage
+  resetUserDailyUsage,
+  handleRedirectResult,
+  createUserDocument
 } from '../services/firebase';
 import { User, AuthContextType } from '../types';
 
@@ -32,18 +34,45 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const checkRedirect = async () => {
+      try {
+        console.log('🔄 Uygulama yüklenirken yönlendirme sonucu kontrol ediliyor...');
+        const firebaseUser = await handleRedirectResult();
+        if (firebaseUser) {
+
+          console.log('✅ Yönlendirme sonucu işlendi, kullanıcı:', firebaseUser.uid);
+        }
+      } catch (error) {
+        console.error('❌ Yönlendirme sonucu işlenirken hata:', error);
+      }
+    };
+
+    checkRedirect();
+  }, []);
+
+  useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       console.log('🔥 Auth state changed:', firebaseUser?.uid);
       
       try {
         if (firebaseUser) {
-          console.log('✅ User is signed in, fetching user document...');
-          // User is signed in
-          const userData = await getUserDocument(firebaseUser.uid);
-          
+          console.log('✅ User is signed in, checking user document...');
+          let userData = await getUserDocument(firebaseUser.uid);
+
+          // EĞER KULLANICI BELGESİ YOKSA OLUŞTUR
+          if (!userData) {
+            console.log('📄 User document not found, creating one...');
+            await createUserDocument(firebaseUser, {
+              name: firebaseUser.displayName || 'Yeni Kullanıcı',
+              email: firebaseUser.email
+            });
+            // Belgeyi oluşturduktan sonra tekrar çekiyoruz.
+            userData = await getUserDocument(firebaseUser.uid);
+          }
+
           if (userData) {
             console.log('📄 User document found:', userData);
-            
+
             // Check if daily usage needs reset
             const today = new Date().toDateString();
             if (userData.lastUsageReset !== today) {
@@ -51,22 +80,23 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               userData.dailyUsage = 0;
               userData.lastUsageReset = today;
             }
-            
+
             // Check subscription status
             if (userData.subscriptionEndDate && new Date() > userData.subscriptionEndDate) {
               // Subscription expired, downgrade to free
-              await updateUserDocument(firebaseUser.uid, { 
+              await updateUserDocument(firebaseUser.uid, {
                 plan: 'free',
                 subscriptionStatus: 'inactive'
               });
               userData.plan = 'free';
               userData.subscriptionStatus = 'inactive';
             }
-            
+
             console.log('🎯 Setting user data and marking as authenticated');
             setUser(userData);
           } else {
-            console.log('❌ No user document found');
+            // Bu blok artık teorik olarak çalışmamalı, ama bir güvenlik önlemi olarak kalabilir.
+            console.log('❌ Critical error: Could not find or create user document.');
             setUser(null);
           }
         } else {
@@ -120,15 +150,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const loginWithGoogle = async () => {
     try {
-      console.log('🔍 Attempting Google login');
-      
-      const firebaseUser = await signInWithGoogle();
-      console.log('✅ Google login successful for:', firebaseUser.uid);
-      
-      // Don't set loading to false here - let onAuthStateChanged handle it
-      
+      console.log('🔍 Google ile giriş deneniyor, yönlendiriliyor...');
+      // Bu fonksiyon sadece yönlendirmeyi başlatır. await'e gerek yok
+      // ama hata yakalamak için yine de async/await yapısında tutabiliriz.
+      await signInWithGoogle();
+      // Yönlendirme başladığı için bu satırdan sonrası çalışmayacaktır.
     } catch (error) {
-      console.error('❌ Google login error:', error);
+      console.error('❌ Google ile giriş başlatılırken hata:', error);
       setLoading(false);
       throw error;
     }
